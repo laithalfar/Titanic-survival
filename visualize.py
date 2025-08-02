@@ -7,9 +7,10 @@ import joblib
 import os
 
 # Set style
-sns.set(style="whitegrid")
+sns.set_theme(style="whitegrid")
 plt.style.use('seaborn-v0_8-whitegrid')
 
+#load data 
 def load_data(file_path='train.csv'):
     """Load the Titanic dataset."""
     try:
@@ -20,16 +21,18 @@ def load_data(file_path='train.csv'):
         print(f"Error loading data: {e}")
         return None
 
+#create folder for visualizations
 def create_visualization_folder():
     """Create a folder for visualizations if it doesn't exist."""
     if not os.path.exists('visualizations'):
         os.makedirs('visualizations')
         print("Created 'visualizations' folder")
 
+
 def visualize_survival_distribution(data):
     """Visualize the distribution of survival."""
     plt.figure(figsize=(10, 6))
-    ax = sns.countplot(x='Survived', data=data, palette='Set1')
+    ax = sns.countplot(x='Survived', hue='Survived', data=data, palette='Set1', legend = False)
     
     # Add count labels
     for p in ax.patches:
@@ -41,6 +44,7 @@ def visualize_survival_distribution(data):
     plt.ylabel('Count', fontsize=12)
     plt.savefig('visualizations/survival_distribution.png')
     plt.close()
+
 
 def visualize_survival_by_feature(data, feature, title, xlabel):
     """Visualize survival rate by a categorical feature."""
@@ -65,6 +69,7 @@ def visualize_survival_by_feature(data, feature, title, xlabel):
     plt.savefig(f'visualizations/survival_by_{feature.lower()}.png')
     plt.close()
 
+
 def visualize_age_distribution(data):
     """Visualize the age distribution by survival status."""
     plt.figure(figsize=(12, 6))
@@ -80,12 +85,13 @@ def visualize_age_distribution(data):
     plt.savefig('visualizations/age_distribution.png')
     plt.close()
 
+
 def visualize_fare_distribution(data):
     """Visualize the fare distribution by survival status."""
     plt.figure(figsize=(12, 6))
     
     # Create boxplot
-    sns.boxplot(x='Survived', y='Fare', data=data, palette='Set2')
+    sns.boxplot(x='Survived', y='Fare', hue='Survived',  data=data, palette='Set2', legend = False)
     
     plt.title('Fare Distribution by Survival Status', fontsize=16)
     plt.xlabel('Survived (0 = No, 1 = Yes)', fontsize=12)
@@ -93,6 +99,7 @@ def visualize_fare_distribution(data):
     plt.tight_layout()
     plt.savefig('visualizations/fare_distribution.png')
     plt.close()
+
 
 def visualize_correlation_matrix(data):
     """Visualize the correlation matrix of numerical features."""
@@ -111,6 +118,7 @@ def visualize_correlation_matrix(data):
     plt.tight_layout()
     plt.savefig('visualizations/correlation_matrix.png')
     plt.close()
+
 
 def visualize_survival_by_pclass_and_sex(data):
     """Visualize survival rate by passenger class and sex."""
@@ -137,6 +145,7 @@ def visualize_survival_by_pclass_and_sex(data):
     plt.savefig('visualizations/survival_by_pclass_and_sex.png')
     plt.close()
 
+
 def visualize_embarked_survival(data):
     """Visualize survival rate by port of embarkation."""
     plt.figure(figsize=(12, 6))
@@ -159,6 +168,7 @@ def visualize_embarked_survival(data):
     plt.tight_layout()
     plt.savefig('visualizations/survival_by_embarked.png')
     plt.close()
+
 
 def visualize_family_size_survival(data):
     """Visualize survival rate by family size."""
@@ -185,6 +195,7 @@ def visualize_family_size_survival(data):
     plt.tight_layout()
     plt.savefig('visualizations/survival_by_family_size.png')
     plt.close()
+
 
 def visualize_feature_importance(model_path='titanic_model.joblib'):
     """Visualize feature importance from the trained model."""
@@ -233,6 +244,8 @@ def visualize_feature_importance(model_path='titanic_model.joblib'):
     except Exception as e:
         print(f"Error visualizing feature importance: {e}")
 
+
+# Main function to create visualizations
 def main():
     # Create visualization folder
     create_visualization_folder()

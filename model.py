@@ -21,7 +21,7 @@ print("\nMissing values:")
 print(df.isnull().sum())
 
 # Feature engineering
-X = preprocess_data(data)# Create age bands
+X = preprocess_data(df)# Create age bands
 X['AgeBand'] = pd.cut(df['Age'], 5)
 
 # # Create fare bands
@@ -49,7 +49,6 @@ plt.ylabel('Survival Rate')
 plt.savefig('survival_by_family.png')
 
 # Feature selection
-
 y = df['Survived']
 
 # Drop unnecessary columns
@@ -126,6 +125,7 @@ if hasattr(best_model[-1], 'feature_importances_'):
     indices = np.argsort(importances)[::-1]
     feature_names = X_train.columns
     
+    #visualize
     plt.figure(figsize=(10, 6))
     plt.title('Feature Importances')
     plt.bar(range(X_train.shape[1]), importances[indices], align='center')
@@ -133,6 +133,7 @@ if hasattr(best_model[-1], 'feature_importances_'):
     plt.tight_layout()
     plt.savefig('feature_importance.png')
     
+    #print
     print("\nFeature Importances:")
     for i in range(len(indices)):
         print(f"{feature_names[indices[i]]}: {importances[indices[i]]:.4f}")
@@ -153,8 +154,10 @@ def predict_survival(passenger_data):
         Survival predictions (0 or 1)
     """
     # Preprocess the data (same as training data)
-    passenger_data['Title'] = passenger_data['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
-    passenger_data['Title'] = passenger_data['Title'].replace(['Lady', 'Countess','Capt', 'Col', 'Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
+    passenger_data['Title'] = passenger_data['Name'].str.extract(' ([A-Za-z]+)\.',
+     expand=False)
+    passenger_data['Title'] = passenger_data['Title'].replace(['Lady', 'Countess',
+    'Capt', 'Col', 'Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
     passenger_data['Title'] = passenger_data['Title'].replace(['Mlle', 'Ms'], 'Miss')
     passenger_data['Title'] = passenger_data['Title'].replace('Mme', 'Mrs')
     passenger_data['FamilySize'] = passenger_data['SibSp'] + passenger_data['Parch'] + 1
@@ -162,7 +165,8 @@ def predict_survival(passenger_data):
     passenger_data.loc[passenger_data['FamilySize'] == 1, 'IsAlone'] = 1
     
     # Select features
-    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'Title', 'FamilySize', 'IsAlone']
+    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 
+    'Title', 'FamilySize', 'IsAlone']
     X_new = passenger_data[features]
     
     # Convert categorical variables

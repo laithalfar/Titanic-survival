@@ -44,7 +44,7 @@ def preprocess_data(data):
     X = data[features]
     
     # Cell 7: Impute missing Age values by Title median
-    df['Age'] = df.groupby('Title')['Age'].transform(lambda x: x.fillna(x.median()))
+    data['Age'] = data.groupby('Title')['Age'].transform(lambda x: x.fillna(x.median()))
     
     # Convert categorical variables to dummy variables
     X = pd.get_dummies(X, columns=['Sex', 'Embarked'])
