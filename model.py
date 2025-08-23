@@ -69,7 +69,6 @@ pipeline = make_pipeline(
 )
 
 
-
 # Define hyperparameters for grid search
 param_grid = {
     'randomforestclassifier__n_estimators': [100, 200],
