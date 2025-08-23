@@ -9,6 +9,9 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 from sklearn.pipeline import make_pipeline
 from sklearn.impute import SimpleImputer
 from predict import preprocess_data
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score, f1_score
+from joblib import dump
 
 # Load the dataset
 df = pd.read_csv("train.csv")
@@ -57,11 +60,15 @@ X = X.drop(['AgeBand', 'FareBand'], axis=1, errors='ignore')
 # Split the data into training and testing sets
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+MODEL_NAME = "random_forest"
+MODEL = RandomForestClassifier(random_state=42)
 # Create a pipeline with preprocessing and model
 pipeline = make_pipeline(
     StandardScaler(),
     RandomForestClassifier(random_state=42)
 )
+
+
 
 # Define hyperparameters for grid search
 param_grid = {
@@ -83,6 +90,11 @@ print("\nBest parameters:", grid_search.best_params_)
 y_pred = best_model.predict(X_test)
 accuracy = accuracy_score(y_test, y_pred)
 print(f"\nAccuracy: {accuracy:.4f}")
+print("Precision:", precision_score(y_test, y_pred, average="weighted"))
+print("Recall:", recall_score(y_test, y_pred, average="weighted"))
+print("F1 Score:", f1_score(y_test, y_pred, average="weighted"))
+print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
 # Print classification report
 print("\nClassification Report:")
@@ -139,7 +151,7 @@ if hasattr(best_model[-1], 'feature_importances_'):
         print(f"{feature_names[indices[i]]}: {importances[indices[i]]:.4f}")
 
 # Save the model
-from joblib import dump
+
 dump(best_model, 'titanic_model.joblib')
 print("\nModel saved as 'titanic_model.joblib'")
 
