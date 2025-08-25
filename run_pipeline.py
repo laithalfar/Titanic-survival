@@ -6,12 +6,18 @@ import subprocess
 import time
 import sys
 
+# Function to print a visually clear formatted header in the terminal
 def print_header(message):
     """Print a formatted header message."""
     print("\n" + "=" * 80)
     print(f" {message} ".center(80, "="))
     print("=" * 80)
 
+# The run_command function allows you to:
+    # Run any shell command from Python.
+    # Print a clear header describing the step.
+    # Show the output live while the command executes.
+    # Detect errors and return a boolean (True/False) indicating success.
 def run_command(command, description):
     """Run a shell command and print its output."""
     print_header(description)
@@ -93,7 +99,7 @@ def run_pipeline():
         return False
     
     # Step 3: Train the model
-    if not run_command("python model.py", "Training Model"):
+    if not run_command("python algorithm_selection.py", "Training Model"):
         print("\nModel training failed. Exiting.")
         return False
     
@@ -134,6 +140,7 @@ def run_pipeline():
     
     return True
 
+#
 if __name__ == "__main__":
     try:
         success = run_pipeline()

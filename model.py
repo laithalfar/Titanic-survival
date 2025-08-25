@@ -2,15 +2,12 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, precision_score, recall_score, f1_score
 from sklearn.pipeline import make_pipeline
-from sklearn.impute import SimpleImputer
 from predict import preprocess_data
-from sklearn.metrics import precision_score
-from sklearn.metrics import recall_score, f1_score
 from joblib import dump
 
 # Load the dataset
@@ -149,8 +146,7 @@ if hasattr(best_model[-1], 'feature_importances_'):
     for i in range(len(indices)):
         print(f"{feature_names[indices[i]]}: {importances[indices[i]]:.4f}")
 
-# Save the model
-
+# Save the model for later use
 dump(best_model, 'titanic_model.joblib')
 print("\nModel saved as 'titanic_model.joblib'")
 
