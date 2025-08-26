@@ -9,6 +9,9 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 from sklearn.pipeline import make_pipeline
 from predict import preprocess_data
 from joblib import dump
+from imblearn.over_sampling import SMOTE
+from collections import Counter
+from sklearn.impute import SimpleImputer
 
 # Load the dataset
 df = pd.read_csv("train.csv")
@@ -56,6 +59,26 @@ X = X.drop(['AgeBand', 'FareBand'], axis=1, errors='ignore')
 
 # Split the data into training and testing sets
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+ 
+# Check class distribution
+print("Before SMOTE:", Counter(y_train))
+
+original_feature_names = X.columns
+
+# Fill missing values
+imputer = SimpleImputer(strategy='median')  # You can use 'mean', 'most_frequent', etc.
+X_train = imputer.fit_transform(X_train)
+X_test = imputer.transform(X_test)
+
+
+X_train = pd.DataFrame(X_train, columns=original_feature_names)
+X_test = pd.DataFrame(X_test, columns=original_feature_names)
+
+# Apply SMOTE
+smote = SMOTE(random_state=42)
+X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+
+print("After SMOTE:", Counter(y_resampled))
 
 MODEL_NAME = "random_forest"
 MODEL = RandomForestClassifier(random_state=42)
@@ -76,7 +99,7 @@ param_grid = {
 
 # Perform grid search with cross-validation
 grid_search = GridSearchCV(pipeline, param_grid, cv=5, scoring='accuracy')
-grid_search.fit(X_train, y_train)
+grid_search.fit(X_resampled, y_resampled)
 
 # Get the best model
 best_model = grid_search.best_estimator_
@@ -129,6 +152,7 @@ plt.savefig('roc_curve.png')
 
 # Feature importance
 if hasattr(best_model[-1], 'feature_importances_'):
+    # Get feature importances
     importances = best_model[-1].feature_importances_
     indices = np.argsort(importances)[::-1]
     feature_names = X_train.columns
