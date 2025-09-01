@@ -99,7 +99,7 @@ def run_pipeline():
         return False
     
     # Step 3: Train the model
-    if not run_command("python algorithm_selection.py", "Training Model"):
+    if not run_command("python model.py", "Training Model"):
         print("\nModel training failed. Exiting.")
         return False
     

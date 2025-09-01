@@ -2,10 +2,10 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, precision_score, recall_score, f1_score, balanced_accuracy_score, matthews_corrcoef, average_precision_score, precision_recall_curve, make_scorer
 from sklearn.pipeline import make_pipeline
 from predict import preprocess_data
 from joblib import dump
@@ -105,15 +105,25 @@ grid_search.fit(X_resampled, y_resampled)
 best_model = grid_search.best_estimator_
 print("\nBest parameters:", grid_search.best_params_)
 
+#stratified k-fold cross-validation to evaluate the model
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+scores = cross_val_score(best_model, X_resampled, y_resampled, cv=cv, scoring='accuracy')
+print(f"Cross-Validation Accuracy: {scores.mean():.4f} ± {scores.std():.4f}")
+
+# MCC scorer
+mcc_scorer = make_scorer(matthews_corrcoef)
+
 # Evaluate the model on the test set
+best_model.fit(X_resampled, y_resampled)
 y_pred = best_model.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
-print(f"\nAccuracy: {accuracy:.4f}")
+
+cv_accuracy = cross_val_score(best_model, X_resampled, y_resampled, cv=cv, scoring='accuracy')
+print(f"Cross-Validation Accuracy: {cv_accuracy.mean():.4f} ± {cv_accuracy.std():.4f}")
+
 print("Precision:", precision_score(y_test, y_pred, average="weighted"))
 print("Recall:", recall_score(y_test, y_pred, average="weighted"))
 print("F1 Score:", f1_score(y_test, y_pred, average="weighted"))
 print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
 # Print classification report
 print("\nClassification Report:")
@@ -136,7 +146,20 @@ plt.savefig('confusion_matrix.png')
 # Calculate ROC curve and AUC
 y_proba = best_model.predict_proba(X_test)[:, 1]
 fpr, tpr, _ = roc_curve(y_test, y_proba)
+tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
 roc_auc = auc(fpr, tpr)
+
+# Balanced Accuracy
+cv_balanced = cross_val_score(best_model, X_resampled, y_resampled, cv=cv, scoring='balanced_accuracy')
+print(f"Cross-Validation Balanced Accuracy: {cv_balanced.mean():.4f} ± {cv_balanced.std():.4f}")
+# MCC
+cv_mcc = cross_val_score(best_model, X_resampled, y_resampled, cv=cv, scoring=mcc_scorer)
+print(f"Cross-Validation MCC: {cv_mcc.mean():.4f} ± {cv_mcc.std():.4f}")
+# Calculate PR AUC (average precision)
+pr_auc = average_precision_score(y_test, y_proba)
+print(f"PR AUC: {pr_auc:.4f}")
+
+
 
 # Plot ROC curve
 plt.figure(figsize=(8, 6))
