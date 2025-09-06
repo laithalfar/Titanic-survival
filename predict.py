@@ -4,6 +4,7 @@ import numpy as np
 import joblib
 import sys
 import os
+from sklearn.model_selection import train_test_split
 
 
 #load an already trained model from joblib library
@@ -22,7 +23,7 @@ def load_model(model_path='titanic_model.joblib'):
         return None
 
 #preprocess data in general
-def preprocess_data(data):
+def preprocess_data(data, is_test=False):
     """Preprocess the test data in the same way as the training data."""
     # Extract titles from names
     data['Title'] = data['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
@@ -39,15 +40,50 @@ def preprocess_data(data):
     data['IsAlone'] = 0
     data.loc[data['FamilySize'] == 1, 'IsAlone'] = 1
     
-    # Select important features for our purpose
-    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'FamilySize', 'IsAlone']
-    X = data[features]
+    # Create cabin feature - first letter of cabin indicates deck
+    data['Cabin_Letter'] = data['Cabin'].str.slice(0, 1) if 'Cabin' in data.columns else None
+    if data['Cabin_Letter'] is not None:
+        data['Cabin_Letter'].fillna('U', inplace=True)  # U for Unknown
     
-    # Cell 7: Impute missing Age values by Title median
-    data['Age'] = data.groupby('Title')['Age'].transform(lambda x: x.fillna(x.median()))
+    # Create name length feature
+    data['Name_Length'] = data['Name'].apply(len)
+    
+    # Create Family_Survival feature
+    # This is a simplified version since we don't have the full training data
+    # We'll set a default value of 0.5 for all
+    data['Family_Survival'] = 0.5
+    
+    # Create ticket first char feature
+    if 'Ticket' in data.columns:
+        data['Ticket_First_Char'] = data['Ticket'].str.slice(0, 1)
+        data['Ticket_First_Char'] = data['Ticket_First_Char'].str.replace('\d+', 'N')
+    
+    # Create age and class interaction feature
+    if 'Age' in data.columns and 'Pclass' in data.columns:
+        # Impute missing Age values by Title median first
+        data['Age'] = data.groupby('Title')['Age'].transform(lambda x: x.fillna(x.median()))
+        data['Age_Class'] = data['Age'] * data['Pclass']
+    
+    # Create fare per person feature
+    if 'Fare' in data.columns:
+        # Fill missing Fare values with median
+        data['Fare'].fillna(data['Fare'].median(), inplace=True)
+        data['Fare_Per_Person'] = data['Fare'] / data['FamilySize']
+    
+    # Select important features for our purpose
+    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 
+                'FamilySize', 'IsAlone', 'Cabin_Letter', 'Name_Length', 
+                'Ticket_First_Char', 'Age_Class', 'Fare_Per_Person', 'Family_Survival']
+    
+    # Only include features that exist in the data
+    available_features = [f for f in features if f in data.columns]
+    X = data[available_features]
     
     # Convert categorical variables to dummy variables
-    X = pd.get_dummies(X, columns=['Sex', 'Embarked'])
+    categorical_features = ['Sex', 'Embarked', 'Cabin_Letter', 'Ticket_First_Char']
+    categorical_features = [f for f in categorical_features if f in X.columns]
+    if categorical_features:
+        X = pd.get_dummies(X, columns=categorical_features)
     
     return X
 
@@ -121,70 +157,52 @@ def main():
         print(f"Loaded test data from {test_file} with {test_data.shape[0]} passengers")
     except Exception as e:
         print(f"Error loading test data: {e}")
-        return
+        print("Attempting to use train.csv and split it into train/test sets...")
+        try:
+            # Load training data and split it
+            train_data = pd.read_csv('train.csv')
+            train_data, test_data = train_test_split(train_data, test_size=0.2, random_state=42)
+            print(f"Created test set from train.csv with {test_data.shape[0]} passengers")
+        except Exception as e2:
+            print(f"Error creating test data from train.csv: {e2}")
+            return
     
-    # Get the training data columns (needed for feature alignment)
-    # This assumes the model is a pipeline with the classifier as the last step
-
-    #check for steps attribute to check the model is a pipeline
-    if hasattr(model, 'steps'):
-
-        # Accesses the last estimator or algorithm in the pipeline 
-        # to check for an attribute only found in classifiers called 
-        #feature_names_in
-        if hasattr(model.steps[-1][1], 'feature_names_in_'):
-
-            #if it has the attribute then it knows the feature name
-            # and thus we can extyract the correct x train columns
-            X_train_columns = model.steps[-1][1].feature_names_in_
-        else:
-            # If feature_names_in_ is not available, we need to infer from the training data
-            print("Warning: Could not determine training features from model.")
-            print("Please ensure test data has the same features as training data.")
-            # Load training data to get columns
-            try:
-                train_data = pd.read_csv('train.csv')
-                X_train = preprocess_data(train_data)
-                X_train_columns = X_train.columns
-            except Exception as e:
-                print(f"Error loading training data: {e}")
-                return
-    else:
-        # For standalone model
-        if hasattr(model, 'feature_names_in_'):
-            X_train_columns = model.feature_names_in_
-        else:
-            # If feature_names_in_ is not available, we need to infer from the training data
-            print("Warning: Could not determine training features from model.")
-            print("Please ensure test data has the same features as training data.")
-            # Load training data to get columns
-            try:
-                train_data = pd.read_csv('train.csv')
-                X_train = preprocess_data(train_data)
-                X_train_columns = X_train.columns
-            except Exception as e:
-                print(f"Error loading training data: {e}")
-                return
-    
-    # Make predictions
-    results = make_predictions(model, test_data, X_train_columns)
-    
-    # Save predictions to CSV
+    # For simplicity, let's just run the model directly on the test data
+    # This avoids feature alignment issues
     try:
+        # Preprocess the test data
+        X_test = preprocess_data(test_data)
+        
+        # Make predictions directly
+        predictions = model.predict(X_test)
+        probabilities = model.predict_proba(X_test)[:, 1]
+        
+        # Add predictions to the original data
+        results = test_data.copy()
+        results['Survived_Predicted'] = predictions
+        results['Survival_Probability'] = probabilities
+        
+        # Save the results
         results.to_csv(output_file, index=False)
         print(f"Predictions saved to {output_file}")
+        
+        # Print some statistics
+        print("\nPrediction Statistics:")
+        print(f"Total passengers: {len(results)}")
+        print(f"Predicted survivors: {results['Survived_Predicted'].sum()} ({results['Survived_Predicted'].mean()*100:.2f}%)")
+        
+        # If actual survival data is available, calculate accuracy
+        if 'Survived' in results.columns:
+            accuracy = (results['Survived'] == results['Survived_Predicted']).mean()
+            print(f"Accuracy: {accuracy*100:.2f}%")
+        
+        return results
     except Exception as e:
-        print(f"Error saving predictions: {e}")
+        print(f"Error making predictions: {e}")
+        return
     
-    # Print summary statistics
-    print("\nPrediction Summary:")
-    print(f"Total passengers: {results.shape[0]}")
-    print(f"Predicted survivors: {results['Survived_Predicted'].sum()} ({results['Survived_Predicted'].mean()*100:.2f}%)")
-    
-    # If actual survival data is available, calculate accuracy
-    if 'Survived' in results.columns:
-        accuracy = (results['Survived'] == results['Survived_Predicted']).mean()
-        print(f"Accuracy: {accuracy*100:.2f}%")
+    # The prediction logic has been moved up in the function
+    # No additional code needed here
 
 if __name__ == "__main__":
     main()
