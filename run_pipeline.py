@@ -23,6 +23,7 @@ def run_command(command, description):
     print_header(description)
     print(f"Running: {command}\n")
     
+    #try to run command
     try:
         # Run the command and capture output
         process = subprocess.Popen(
@@ -51,10 +52,12 @@ def run_command(command, description):
         print(f"\nError executing command: {e}")
         return False
 
+#check if all dependencies needed are present
 def check_dependencies():
     """Check if all required dependencies are installed."""
     print_header("Checking Dependencies")
     
+    #check if required dependencies in requirements.txt are installed
     try:
         # Check if requirements.txt exists
         if not os.path.exists("requirements.txt"):
@@ -67,13 +70,16 @@ def check_dependencies():
         print(f"Error checking dependencies: {e}")
         return False
 
+#check if the required data files exist
 def check_data():
     """Check if the required data files exist."""
     print_header("Checking Data Files")
-    
+
+  #  check for train.csv and point out missing files
     required_files = ["train.csv"]
     missing_files = [f for f in required_files if not os.path.exists(f)]
     
+    #display error if there are missing files else display success
     if missing_files:
         print(f"Error: The following required files are missing: {', '.join(missing_files)}")
         return False
@@ -81,6 +87,7 @@ def check_data():
         print("All required data files are present")
         return True
 
+#run the complete pipeline
 def run_pipeline():
     """Run the complete Titanic survival prediction pipeline."""
     start_time = time.time()
@@ -140,7 +147,7 @@ def run_pipeline():
     
     return True
 
-#
+#run the main function
 if __name__ == "__main__":
     try:
         success = run_pipeline()

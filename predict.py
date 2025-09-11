@@ -55,9 +55,27 @@ def improve_fare_imputation(df):
                 df.loc[idx, 'Fare'] = df[df['Pclass'] == pclass]['Fare'].median()
     
     return df
-#preprocess data in general
+
+
+def remove_outliers_iqr(df, columns, k=1.5):
+    """
+    Remove rows with outliers in given columns using the IQR rule.
+    k=1.5 -> standard, can increase for less aggressive removal.
+    """
+    clean_df = df.copy()
+    for col in columns:
+        if pd.api.types.is_numeric_dtype(clean_df[col]):
+            Q1 = clean_df[col].quantile(0.25)
+            Q3 = clean_df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            lower = Q1 - k * IQR
+            upper = Q3 + k * IQR
+            clean_df = clean_df[(clean_df[col] >= lower) & (clean_df[col] <= upper)]
+    return clean_df
+
+#preprocess training data in general
 def preprocess_data(data, is_test=False):
-    """Preprocess the test data in the same way as the training data."""
+    """Preprocess the training data"""
     # Extract titles from names
     data['Title'] = data['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
     
@@ -66,8 +84,7 @@ def preprocess_data(data, is_test=False):
     data['Title'] = data['Title'].replace(['Mlle', 'Ms'], 'Miss')
     data['Title'] = data['Title'].replace('Mme', 'Mrs')
     
-    # data = improve_age_imputation(data)
-    # data = improve_fare_imputation(data)
+
     # Create family size feature
     data['FamilySize'] = data['SibSp'] + data['Parch'] + 1
     
@@ -129,26 +146,21 @@ def preprocess_data(data, is_test=False):
     # Class-Sex interaction (historically important for Titanic)
     data['Class_Sex'] = data['Pclass'].astype(str) + '_' + data['Sex']
 
-
+    remove_outliers_iqr(data, data.columns.tolist())
     # Select important features for our purpose
-    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'FamilySize', 'IsAlone', 'Age_Group', 'Fare_Group', 'Cabin_Letter', 'Ticket_First_Char', 'Age_Sex', 'Name_Length', 'Class_Sex']
+    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'FamilySize', 'IsAlone', 'Age_Group', 'Fare_Group', 'Cabin_Letter', 'Ticket_First_Char', 'Age_Sex', 'Name_Length', 'Class_Sex', 'Family_Survival', 'Fare_Per_Person', 'Age_Class']
     
     # Only include features that exist in the data
     available_features = [f for f in features if f in data.columns]
     X = data[available_features]
     
-    # # Convert categorical variables to dummy variables
-    # categorical_features = ['Sex', 'Embarked', 'Cabin_Letter', 'Ticket_First_Char']
-    # categorical_features = [f for f in categorical_features if f in X.columns]
-    # if categorical_features:
-    #     X = pd.get_dummies(X, columns=categorical_features)
-    
     return X
 
 
-
+#test data to match training data
 def align_features(X_test, X_train_columns):
     """Ensure test data has the same features as training data."""
+
     # Add missing columns
     for col in X_train_columns:
         if col not in X_test.columns:
@@ -164,7 +176,7 @@ def align_features(X_test, X_train_columns):
     
     return X_test
 
-
+#Make using the existing model
 def make_predictions(model, data, X_train_columns):
     """Make predictions using the trained model."""
     # Preprocess the data
@@ -184,6 +196,7 @@ def make_predictions(model, data, X_train_columns):
     
     return results
 
+#main code
 def main():
     # Check if test file is provided as command line argument
     if len(sys.argv) > 1:

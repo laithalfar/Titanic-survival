@@ -21,6 +21,7 @@ from sklearn.compose import ColumnTransformer
 
 
 
+
 # Set flag to indicate XGBoost is available
 xgboost_available = True
 
@@ -107,6 +108,8 @@ plt.title('Survival Rate by Family Size')
 plt.ylabel('Survival Rate')
 plt.savefig('survival_by_family.png')
 
+# print the columns
+print("Columns:", X.columns.tolist())
 #analyze distribution shift before smote for better debugging after smote
 def analyze_distribution_shift(X_train, X_test, feature_cols):
     """Check if test set has different distribution than training set"""
@@ -167,14 +170,12 @@ class DomainAdaptationScaler(BaseEstimator, TransformerMixin):
             # else: skip booleans or categorical dummies
         return X_scaled
 
-# print the columns
-print("Columns:", X.columns.tolist())
 # Drop unnecessary columns
 #X = X.drop(['AgeBand', 'FareBand'], axis=1, errors='ignore')
 
 
 # identify categorical features to dummy variables
-categorical_features = ['Sex', 'Embarked', 'FamilySize', 'IsAlone', 'Age_Group', 'Fare_Group', 'Cabin_Letter', 'Ticket_First_Char', 'Age_Sex', 'Name_Length', 'Class_Sex']
+categorical_features = ['Sex', 'Embarked', 'FamilySize', 'IsAlone', 'Age_Group', 'Fare_Group', 'Cabin_Letter', 'Ticket_First_Char', 'Age_Sex', 'Name_Length', 'Class_Sex', 'Family_Survival', 'Fare_Per_Person', 'Age_Class']
 
 #identify numerical features
 numerical_features = [
@@ -229,8 +230,6 @@ else:
 # Define a more robust cross-validation strategy
 repeated_cv = RepeatedStratifiedKFold(n_splits=10, n_repeats=5, random_state=432)
 
-# Implement feature selection using SelectFromModel with RandomForest
-print("\nImplementing feature selection using SelectFromModel...")
 
 # --- Scale features to reduce domain shift ---
 domain_scaler = DomainAdaptationScaler()
@@ -281,7 +280,7 @@ else:
     print("No significant distribution shifts detected")
 
 
-# Base learners (DecisionTree + RF + XGBoost)
+# Base learners ( RF + XGBoost)
 rf =  ('random_forest', RandomForestClassifier(
     n_estimators=100, max_depth=7, min_samples_split=15,
     min_samples_leaf=7, max_features='sqrt', random_state=432, class_weight = 'balanced'
@@ -389,7 +388,6 @@ scoring = {
 }
 
 # Perform cross-validation with multiple metrics
-
 cv_results = cross_validate(best_model, X_train_main, y_train_main, 
                            cv=repeated_cv, scoring=scoring, 
                            return_train_score=True, n_jobs=-1)
@@ -406,7 +404,8 @@ for metric in scoring.keys():
 
 y_val_pred = best_model.predict(X_val)
 y_val_proba = best_model.predict_proba(X_val)[:, 1]
-# Calculate and print test set metrics
+
+# Calculate and print val set metrics
 print("\nVal Set Metrics:")
 print("Accuracy:", accuracy_score(y_val, y_val_pred))
 print("Balanced Accuracy:", balanced_accuracy_score(y_val, y_val_pred))
@@ -472,6 +471,7 @@ print(f"Cross-Validation Balanced Accuracy: {cv_balanced.mean():.4f} ± {cv_bala
 mcc_scorer = make_scorer(matthews_corrcoef)
 cv_mcc = cross_val_score(best_model, X_train_main, y_train_main, cv=repeated_cv, scoring=mcc_scorer)
 print(f"Cross-Validation MCC: {cv_mcc.mean():.4f} ± {cv_mcc.std():.4f}")
+
 # Calculate PR AUC (average precision)
 pr_auc = average_precision_score(y_test, y_proba)
 print(f"PR AUC: {pr_auc:.4f}")
