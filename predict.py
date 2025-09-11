@@ -22,6 +22,39 @@ def load_model(model_path='titanic_model.joblib'):
         print(f"Error loading model: {e}")
         return None
 
+# 1. More robust age imputation
+def improve_age_imputation(df):
+    """Use more sophisticated age imputation based on title and class"""
+    # Calculate median age by title and class
+    age_by_title_class = df.groupby(['Title', 'Pclass'])['Age'].median()
+    
+    # Fill missing ages
+    for idx, row in df.iterrows():
+        if pd.isna(row['Age']):
+            title = row['Title']
+            pclass = row['Pclass']
+            if (title, pclass) in age_by_title_class.index:
+                df.loc[idx, 'Age'] = age_by_title_class[(title, pclass)]
+            else:
+                df.loc[idx, 'Age'] = df.groupby('Title')['Age'].median()[title]
+    
+    return df
+
+# 2. Better fare imputation
+def improve_fare_imputation(df):
+    """Impute fare based on class and embarkation port"""
+    fare_by_class_port = df.groupby(['Pclass', 'Embarked'])['Fare'].median()
+    
+    for idx, row in df.iterrows():
+        if pd.isna(row['Fare']):
+            pclass = row['Pclass']
+            embarked = row['Embarked']
+            if (pclass, embarked) in fare_by_class_port.index:
+                df.loc[idx, 'Fare'] = fare_by_class_port[(pclass, embarked)]
+            else:
+                df.loc[idx, 'Fare'] = df[df['Pclass'] == pclass]['Fare'].median()
+    
+    return df
 #preprocess data in general
 def preprocess_data(data, is_test=False):
     """Preprocess the test data in the same way as the training data."""
@@ -33,24 +66,29 @@ def preprocess_data(data, is_test=False):
     data['Title'] = data['Title'].replace(['Mlle', 'Ms'], 'Miss')
     data['Title'] = data['Title'].replace('Mme', 'Mrs')
     
+    # data = improve_age_imputation(data)
+    # data = improve_fare_imputation(data)
     # Create family size feature
     data['FamilySize'] = data['SibSp'] + data['Parch'] + 1
     
     # Create is_alone feature
     data['IsAlone'] = 0
     data.loc[data['FamilySize'] == 1, 'IsAlone'] = 1
+
+    # Impute Embarked with mode
+    data['Embarked'].fillna(data['Embarked'].mode()[0], inplace=True)
     
     # Create cabin feature - first letter of cabin indicates deck
     data['Cabin_Letter'] = data['Cabin'].str.slice(0, 1) if 'Cabin' in data.columns else None
     if data['Cabin_Letter'] is not None:
         data['Cabin_Letter'].fillna('U', inplace=True)  # U for Unknown
     
-    # Create name length feature
+   # Create name length feature
     data['Name_Length'] = data['Name'].apply(len)
     
-    # Create Family_Survival feature
-    # This is a simplified version since we don't have the full training data
-    # We'll set a default value of 0.5 for all
+    #Create Family_Survival feature
+    #This is a simplified version since we don't have the full training data
+    #We'll set a default value of 0.5 for all
     data['Family_Survival'] = 0.5
     
     # Create ticket first char feature
@@ -69,21 +107,41 @@ def preprocess_data(data, is_test=False):
         # Fill missing Fare values with median
         data['Fare'].fillna(data['Fare'].median(), inplace=True)
         data['Fare_Per_Person'] = data['Fare'] / data['FamilySize']
+
+
+    # # Age groups instead of continuous age
+    data['Age_Group'] = pd.cut(data['Age'], bins=[0, 12, 18, 35, 60, 100], 
+                            labels=['Child', 'Teen', 'Adult', 'Middle', 'Senior'])    
+    # # Age-Sex interaction
+    data['Age_Sex'] = data['Age_Group'].astype(str) + '_' + data['Sex']
+
+    # # Create name length feature - longer names might indicate higher social status
+    data['Name_Length'] = data['Name'].apply(len)
+
+    # # Create ticket first char feature
+    data['Ticket_First_Char'] = data['Ticket'].str.slice(0, 1)
     
+        
+    # Fare groups instead of continuous
+    data['Fare_Group'] = pd.qcut(data['Fare'], q=4, labels=["Very_Low", "Low", "Medium", "High"])
+
+
+    # Class-Sex interaction (historically important for Titanic)
+    data['Class_Sex'] = data['Pclass'].astype(str) + '_' + data['Sex']
+
+
     # Select important features for our purpose
-    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 
-                'FamilySize', 'IsAlone', 'Cabin_Letter', 'Name_Length', 
-                'Ticket_First_Char', 'Age_Class', 'Fare_Per_Person', 'Family_Survival']
+    features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'FamilySize', 'IsAlone', 'Age_Group', 'Fare_Group', 'Cabin_Letter', 'Ticket_First_Char', 'Age_Sex', 'Name_Length', 'Class_Sex']
     
     # Only include features that exist in the data
     available_features = [f for f in features if f in data.columns]
     X = data[available_features]
     
-    # Convert categorical variables to dummy variables
-    categorical_features = ['Sex', 'Embarked', 'Cabin_Letter', 'Ticket_First_Char']
-    categorical_features = [f for f in categorical_features if f in X.columns]
-    if categorical_features:
-        X = pd.get_dummies(X, columns=categorical_features)
+    # # Convert categorical variables to dummy variables
+    # categorical_features = ['Sex', 'Embarked', 'Cabin_Letter', 'Ticket_First_Char']
+    # categorical_features = [f for f in categorical_features if f in X.columns]
+    # if categorical_features:
+    #     X = pd.get_dummies(X, columns=categorical_features)
     
     return X
 

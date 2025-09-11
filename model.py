@@ -2,22 +2,23 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold, cross_val_score, RandomizedSearchCV, RepeatedStratifiedKFold, cross_validate
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.model_selection import train_test_split, cross_val_score, RandomizedSearchCV, RepeatedStratifiedKFold, cross_validate
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, precision_score, recall_score, f1_score, balanced_accuracy_score, matthews_corrcoef, average_precision_score, precision_recall_curve, make_scorer, roc_auc_score
-from sklearn.feature_selection import SelectFromModel, RFE, RFECV
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LogisticRegression
 from predict import preprocess_data
 from joblib import dump
 from collections import Counter
 from sklearn.impute import SimpleImputer
-from sklearn.tree import DecisionTreeClassifier
 import scipy.stats as stats  # allows you to define distributions
 from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 from sklearn.inspection import permutation_importance
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.compose import ColumnTransformer
+
 
 
 # Set flag to indicate XGBoost is available
@@ -36,31 +37,24 @@ print(df.isnull().sum())
 # Feature engineering
 X = preprocess_data(df)
 
-# Create age bands with more granular bins
-X['AgeBand'] = pd.cut(df['Age'], 8)
+#once preprocessing is applied check for missing values again
+print("Missing values after preprocessing: " , df.isnull().sum())
 
-# Create fare bands with more granular bins
-X['FareBand'] = pd.cut(df['Fare'], 6)
+"""Create interaction features that are less prone to overfitting"""
 
-# Create cabin feature - first letter of cabin indicates deck
-df['Cabin_Letter'] = df['Cabin'].str.slice(0, 1)
-df['Cabin_Letter'].fillna('U', inplace=True)  # U for Unknown
-X['Cabin_Letter'] = df['Cabin_Letter']
+# Feature selection
+y = df['Survived']
 
-# Create name length feature - longer names might indicate higher social status
-X['Name_Length'] = df['Name'].apply(len)
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=432, stratify=y)
 
-# Create ticket first char feature
-X['Ticket_First_Char'] = df['Ticket'].str.slice(0, 1)
-X['Ticket_First_Char'] = X['Ticket_First_Char'].str.replace('\d+', 'N')
+# Split a small validation set from training for internal evaluation
+X_train_main, X_val, y_train_main, y_val = train_test_split(
+    X_train, y_train, test_size=0.15, stratify=y_train, random_state=432
+)
 
-# Create age and class interaction feature
-X['Age_Class'] = X['Age'] * df['Pclass']
 
-# Create fare per person feature
-X['Fare_Per_Person'] = df['Fare'] / X['FamilySize']
-
-# Fix potential data leakage in family survival feature
+#function for adding family_survival column
 def create_family_survival_safe(df_train, df_all):
     """Calculate family survival only from training data to avoid leakage"""
     family_survival = {}
@@ -81,175 +75,284 @@ def create_family_survival_safe(df_train, df_all):
     
     return df_all.drop('Family_ID', axis=1)
 
+# Use the training indices to identify training data
+train_indices = X_train_main.index
+df_with_safe_family = create_family_survival_safe(df.iloc[train_indices], df.copy())
+
+# NOW: Recreate your features for only training data with the corrected family survival
+X_train_main = preprocess_data(df_with_safe_family.loc[train_indices])  # This should now include Family_Survival
+X_val = preprocess_data(df_with_safe_family.loc[X_val.index])  # This should now include Family_Survival
+X_test = preprocess_data(df_with_safe_family.loc[X_test.index])  # This should now include Family_Survival
+
+# Fix potential data leakage in family survival feature
 
 # Visualize survival rate by sex
 plt.figure(figsize=(10, 6))
-df.groupby('Sex')['Survived'].mean().plot(kind='bar')
+df_with_safe_family.groupby('Sex')['Survived'].mean().plot(kind='bar')
 plt.title('Survival Rate by Sex')
 plt.ylabel('Survival Rate')
 plt.savefig('survival_by_sex.png')
 
 # Visualize survival rate by passenger class
 plt.figure(figsize=(10, 6))
-df.groupby('Pclass')['Survived'].mean().plot(kind='bar')
+df_with_safe_family.groupby('Pclass')['Survived'].mean().plot(kind='bar')
 plt.title('Survival Rate by Passenger Class')
 plt.ylabel('Survival Rate')
 plt.savefig('survival_by_class.png')
 
 # Visualize survival rate by family size
 plt.figure(figsize=(10, 6))
-df.groupby('FamilySize')['Survived'].mean().plot(kind='bar')
+df_with_safe_family.groupby('FamilySize')['Survived'].mean().plot(kind='bar')
 plt.title('Survival Rate by Family Size')
 plt.ylabel('Survival Rate')
 plt.savefig('survival_by_family.png')
 
-# Feature selection
-y = df['Survived']
+#analyze distribution shift before smote for better debugging after smote
+def analyze_distribution_shift(X_train, X_test, feature_cols):
+    """Check if test set has different distribution than training set"""
+    shift_detected = []
 
+    for col in feature_cols:
+        # Ensure we are working with Series
+        if isinstance(X_train[col], pd.DataFrame):
+            continue  # Skip multi-column cases
+
+        # Numeric columns (including one-hot)
+        if pd.api.types.is_numeric_dtype(X_train[col]):
+            ks_stat, p_value = stats.ks_2samp(X_train[col], X_test[col])
+            if p_value < 0.05:
+                shift_detected.append((col, 'continuous', ks_stat, p_value))
+
+        # Only remaining non-numeric categorical columns
+        else:
+            train_counts = X_train[col].value_counts()
+            test_counts = X_test[col].value_counts()
+
+            # Align categories
+            all_categories = set(train_counts.index) | set(test_counts.index)
+            train_aligned = [train_counts.get(cat, 0) for cat in all_categories]
+            test_aligned = [test_counts.get(cat, 0) for cat in all_categories]
+
+            # Scale train counts to match test total
+            total_train = sum(train_aligned)
+            total_test = sum(test_aligned)
+            if total_train > 0 and total_test > 0:
+                train_scaled = [x * (total_test / total_train) for x in train_aligned]
+                chi2_stat, p_value = stats.chisquare(f_obs=test_aligned, f_exp=train_scaled)
+                if p_value < 0.05:
+                    shift_detected.append((col, 'categorical', chi2_stat, p_value))
+    
+    return shift_detected
+
+#prevent domain shift between test and train data
+class DomainAdaptationScaler(BaseEstimator, TransformerMixin):
+    """Scale features to reduce domain shift"""
+    
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        X_scaled = X.copy()
+        
+        for col in X.columns:
+            # Only scale numeric columns that are NOT boolean
+            if pd.api.types.is_numeric_dtype(X[col]) and not pd.api.types.is_bool_dtype(X[col]):
+                median = X[col].median()
+                q75, q25 = X[col].quantile([0.75, 0.25])
+                iqr = q75 - q25
+                if iqr > 0:
+                    X_scaled[col] = (X[col] - median) / iqr
+                else:
+                    X_scaled[col] = X[col] - median
+            # else: skip booleans or categorical dummies
+        return X_scaled
+
+# print the columns
+print("Columns:", X.columns.tolist())
 # Drop unnecessary columns
-X = X.drop(['AgeBand', 'FareBand'], axis=1, errors='ignore')
+#X = X.drop(['AgeBand', 'FareBand'], axis=1, errors='ignore')
 
-# Convert categorical features to dummy variables
-categorical_features = ['Sex', 'Embarked', 'Cabin_Letter', 'Ticket_First_Char', 'Title']
-for feature in categorical_features:
-    if feature in X.columns:
-        dummies = pd.get_dummies(X[feature], prefix=feature, drop_first=True)
-        X = pd.concat([X.drop(feature, axis=1), dummies], axis=1)
 
-# Split the data into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+# identify categorical features to dummy variables
+categorical_features = ['Sex', 'Embarked', 'FamilySize', 'IsAlone', 'Age_Group', 'Fare_Group', 'Cabin_Letter', 'Ticket_First_Char', 'Age_Sex', 'Name_Length', 'Class_Sex']
+
+#identify numerical features
+numerical_features = [
+    "Age",
+    "Fare",
+    "SibSp",
+    "Parch",
+]
+
+
+# change categorical features into numerical and identify them with marks cat and num
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_features),
+        ("num", "passthrough", numerical_features)  # keep numeric as-is
+    ]
+)
+
+# Fit on train, transform both train & test while maintaining same column structure
+X_train_main = preprocessor.fit_transform(X_train_main)
+X_val = preprocessor.transform(X_val)  # avoid data leakage
+X_test = preprocessor.transform(X_test)
+
+# Get feature names after encoding done at lines 209-210
+encoded_feature_names = preprocessor.get_feature_names_out()
+X_train_main = pd.DataFrame(X_train_main, columns=encoded_feature_names, index=y_train_main.index)
+X_val = pd.DataFrame(X_val, columns=encoded_feature_names, index=y_val.index)
+X_test = pd.DataFrame(X_test, columns=encoded_feature_names, index=y_test.index)
+
+# ADD HERE - Analyze if your test set is different from training
+feature_cols = X_train_main.columns.tolist()
+distribution_shifts_val = analyze_distribution_shift(X_train_main, X_val, feature_cols)
+distribution_shifts_test = analyze_distribution_shift(X_train_main, X_test, feature_cols)
+
+print(" DISTRIBUTION SHIFT ANALYSIS for val:")
+if distribution_shifts_val:
+    print("Features with significant distribution differences:")
+    for feature, type_, stat, p_val in distribution_shifts_val:
+        print(f"  • {feature} ({type_}): stat={stat:.4f}, p-value={p_val:.4f}")
+else:
+    print("No significant distribution shifts detected")
+
+
+print(" DISTRIBUTION SHIFT ANALYSIS for test:")
+if distribution_shifts_test:
+    print("Features with significant distribution differences:")
+    for feature, type_, stat, p_val in distribution_shifts_test:
+        print(f"  • {feature} ({type_}): stat={stat:.4f}, p-value={p_val:.4f}")
+else:
+    print("No significant distribution shifts detected")
+
+# Define a more robust cross-validation strategy
+repeated_cv = RepeatedStratifiedKFold(n_splits=10, n_repeats=5, random_state=432)
 
 # Implement feature selection using SelectFromModel with RandomForest
 print("\nImplementing feature selection using SelectFromModel...")
 
-# Create a temporary RandomForest model for feature selection
-feature_selector = SelectFromModel(
-    RandomForestClassifier(n_estimators=100, random_state=42),
-    threshold='median'
-)
-
-# Store original feature names
-original_feature_names = X_train.columns.tolist()
-
-# Fit the selector to the training data
-feature_selector.fit(X_train, y_train)
-
-# Get selected feature mask and names
-selected_features_mask = feature_selector.get_support()
-selected_feature_names = [original_feature_names[i] for i in range(len(original_feature_names)) if selected_features_mask[i]]
-
-print(f"Selected {len(selected_feature_names)} features out of {len(original_feature_names)}")
-print("Selected features:", selected_feature_names)
-
-# Transform the data to include only selected features
-X_train_selected = feature_selector.transform(X_train)
-X_test_selected = feature_selector.transform(X_test)
-
-# Convert back to DataFrame with selected feature names
-X_train = pd.DataFrame(X_train_selected, columns=selected_feature_names)
-X_test = pd.DataFrame(X_test_selected, columns=selected_feature_names)
-
-# Visualize selected vs. all features
-plt.figure(figsize=(10, 6))
-plt.bar(range(len(selected_features_mask)), selected_features_mask.astype(int))
-plt.xticks(range(len(selected_features_mask)), original_feature_names, rotation=90)
-plt.title('Selected Features')
-plt.tight_layout()
-plt.savefig('feature_selection.png')
+# --- Scale features to reduce domain shift ---
+domain_scaler = DomainAdaptationScaler()
+X_train_scaled = domain_scaler.fit_transform(X_train_main)
+X_val_scaled = domain_scaler.transform(X_val)
+X_test_scaled = domain_scaler.transform(X_test)
 
 # Check class distribution
 print("Before SMOTE:", Counter(y_train))
 
 # Store column names before imputation
-train_columns = X_train.columns
+train_columns = X_train_main.columns
 test_columns = X_test.columns
 
-# Fill missing values
-imputer = SimpleImputer(strategy='median')  # You can use 'mean', 'most_frequent', etc.
-X_train = imputer.fit_transform(X_train)
-X_test = imputer.transform(X_test)
+# Impute missing values (after selection)
+imputer = SimpleImputer(strategy='median')
+X_train_for_smote = pd.DataFrame(imputer.fit_transform(X_train_main), columns=X_train_main.columns)
+X_test = pd.DataFrame(imputer.transform(X_test), columns=X_test.columns)
 
-# Convert back to DataFrame with the stored column names
-X_train = pd.DataFrame(X_train, columns=train_columns)
-X_test = pd.DataFrame(X_test, columns=test_columns)
+# print the columns
+print("Columns after imputing:", X.columns.tolist())
 
 # Apply SMOTE
-smote = SMOTE(random_state=42)
-X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+smote = SMOTE(random_state=432)
+X_resampled, y_resampled = smote.fit_resample(X_train_for_smote, y_train_main)
 
 print("After SMOTE:", Counter(y_resampled))
 
+# ADD HERE - Analyze if your test set is different from training
+feature_cols = X_train_main.columns.tolist()
+distribution_shifts_val = analyze_distribution_shift(X_train_main, X_val, feature_cols)
+distribution_shifts_test = analyze_distribution_shift(X_train_main, X_test, feature_cols)
+
+print(" DISTRIBUTION SHIFT ANALYSIS:")
+if distribution_shifts_val:
+    print("Features with significant distribution differences:")
+    for feature, type_, stat, p_val in distribution_shifts_val:
+        print(f"  • {feature} ({type_}): stat={stat:.4f}, p-value={p_val:.4f}")
+else:
+    print("No significant distribution shifts detected")
+
+print(" DISTRIBUTION SHIFT ANALYSIS:")
+if distribution_shifts_test:
+    print("Features with significant distribution differences:")
+    for feature, type_, stat, p_val in distribution_shifts_test:
+        print(f"  • {feature} ({type_}): stat={stat:.4f}, p-value={p_val:.4f}")
+else:
+    print("No significant distribution shifts detected")
+
+
 # Base learners (DecisionTree + RF + XGBoost)
+rf =  ('random_forest', RandomForestClassifier(
+    n_estimators=100, max_depth=7, min_samples_split=15,
+    min_samples_leaf=7, max_features='sqrt', random_state=432, class_weight = 'balanced'
+))
+
 
 # Define base learners
 base_learners = [
-    ('decision_tree', DecisionTreeClassifier(max_depth=5, random_state=42)),
-    ('random_forest', RandomForestClassifier(n_estimators=100, random_state=42))
+    rf
 ]
+
+
+# Count classes
+counter = Counter(y_train)  # y_train is your target vector
+num_positive = counter[1]   # Survived
+num_negative = counter[0]   # Did not survive
+
+xgb = ('xgb', XGBClassifier(
+    n_estimators=150, learning_rate=0.05, max_depth=4,
+    reg_alpha=0.5, reg_lambda=0.5, subsample=0.8,
+    colsample_bytree=0.8, random_state=432, scale_pos_weight = (num_negative / num_positive)
+))
 
 # Add XGBoost if available
 if xgboost_available:
-    base_learners.append(('xgb', XGBClassifier(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=4,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42,
-        scale_pos_weight=1.5
-    )))
+    base_learners.append(xgb)
 else:
     print("XGBoost not available, using only DecisionTree and RandomForest as base learners.")
 
 
 # Meta learner (can still use Logistic Regression because it’s light & stable)
-meta_learner = LogisticRegression(max_iter=1000)
+meta_learner = ('logistic_regression', LogisticRegression(
+    C=0.1, penalty='l2', max_iter=1000, random_state=432, class_weight = 'balanced'
+))
 
-stacking_clf = StackingClassifier(
-    estimators=base_learners,
-    final_estimator=LogisticRegression(class_weight="balanced", random_state=42),
-    cv=5,
-    n_jobs=-1
+voting_clf = VotingClassifier(
+    estimators=[
+        ( rf),
+        ( xgb),
+        (meta_learner)
+    ],
+    voting='soft'  # Use probabilities
 )
+
 # Create a pipeline with preprocessing and model
 pipeline = make_pipeline(
     StandardScaler(),
-    stacking_clf
+    voting_clf
     )
 
 
 # Define hyperparameters for grid search using probability distributions
 param_grid = {
-    # Decision Tree parameters
-    'stackingclassifier__decision_tree__max_depth': [3, 5, 7, 9, None],
-    'stackingclassifier__decision_tree__min_samples_split': stats.randint(2, 20),
-    'stackingclassifier__decision_tree__min_samples_leaf': stats.randint(1, 10),
-    'stackingclassifier__decision_tree__criterion': ['gini', 'entropy'],
-    'stackingclassifier__decision_tree__max_features': ['sqrt', 'log2', None],
+     # Random Forest - more regularized
+    'votingclassifier__random_forest__n_estimators': [50, 100, 150],  # Fewer trees
+    'votingclassifier__random_forest__max_depth': [5, 7, 10],  # Shallower trees
+    'votingclassifier__random_forest__min_samples_split': [10, 15, 20],  # More conservative splits
+    'votingclassifier__random_forest__min_samples_leaf': [5, 7, 10],  # Larger leaf sizes
+    'votingclassifier__random_forest__max_features': ['sqrt'],  # Feature subsampling
     
-    # Random Forest parameters
-    'stackingclassifier__random_forest__n_estimators': stats.randint(100, 500),
-    'stackingclassifier__random_forest__max_depth': [None, 5, 10, 15, 20],
-    'stackingclassifier__random_forest__min_samples_split': stats.randint(2, 20),
-    'stackingclassifier__random_forest__min_samples_leaf': stats.randint(1, 10),
-    'stackingclassifier__random_forest__max_features': ['sqrt', 'log2', None],
-    'stackingclassifier__random_forest__bootstrap': [True, False],
-    'stackingclassifier__random_forest__class_weight': ['balanced', 'balanced_subsample', None],
+    # XGBoost - add more regularization
+    'votingclassifier__xgb__n_estimators': [100, 150, 200],
+    'votingclassifier__xgb__learning_rate': [0.01, 0.05, 0.1],  # Lower learning rates
+    'votingclassifier__xgb__max_depth': [3, 4, 5],  # Shallower trees
+    'votingclassifier__xgb__reg_alpha': [0.1, 0.5, 1.0],  # L1 regularization
+    'votingclassifier__xgb__reg_lambda': [0.1, 0.5, 1.0],  # L2 regularization
+    'votingclassifier__xgb__subsample': [0.8, 0.9],  # Row sampling
+    'votingclassifier__xgb__colsample_bytree': [0.8, 0.9],  # Column sampling
     
-    # XGBoost parameters (only included if XGBoost is available)
-    'stackingclassifier__xgb__n_estimators': stats.randint(100, 500),
-    'stackingclassifier__xgb__learning_rate': stats.uniform(0.01, 0.2),
-    'stackingclassifier__xgb__max_depth': stats.randint(3, 8),
-    'stackingclassifier__xgb__subsample': stats.uniform(0.6, 0.4),
-    'stackingclassifier__xgb__colsample_bytree': stats.uniform(0.6, 0.4),
-    'stackingclassifier__xgb__reg_alpha': stats.uniform(0, 1),
-    'stackingclassifier__xgb__reg_lambda': stats.uniform(0, 1),
-    'stackingclassifier__xgb__scale_pos_weight': stats.uniform(1, 3),
-    
-    # Meta-learner (LogisticRegression) parameters
-    'stackingclassifier__final_estimator__C': stats.uniform(0.1, 10),
-    'stackingclassifier__final_estimator__solver': ['liblinear', 'saga'],
-    'stackingclassifier__final_estimator__penalty': ['l1', 'l2']
+    # Logistic Regression
+    'votingclassifier__logistic_regression__C': [0.01, 0.1, 1.0, 10]
 }
 
 
@@ -258,22 +361,21 @@ random_search = RandomizedSearchCV(
     pipeline,
     param_distributions=param_grid,
     n_iter=100,  # increased number of random combinations to try
-    cv=5,
-    scoring='f1',  # Changed to F1 score which balances precision and recall
-    random_state=42,
+    cv=repeated_cv,
+    scoring='recall',  # Changed to F1 score which balances precision and recall
+    random_state=432,
     n_jobs=-1,
     verbose=1,
     return_train_score=True  # Return training scores for analysis
 )
-random_search.fit(X_resampled, y_resampled)
+
+random_search.fit(X_train_main, y_train_main)
 
 # Get the best model
 best_model = random_search.best_estimator_
 print("\nBest parameters:", random_search.best_params_)
 
 
-# Define a more robust cross-validation strategy
-repeated_cv = RepeatedStratifiedKFold(n_splits=10, n_repeats=5, random_state=42)
 
 # Define multiple scoring metrics for comprehensive evaluation
 scoring = {
@@ -288,7 +390,7 @@ scoring = {
 
 # Perform cross-validation with multiple metrics
 
-cv_results = cross_validate(best_model, X_resampled, y_resampled, 
+cv_results = cross_validate(best_model, X_train_main, y_train_main, 
                            cv=repeated_cv, scoring=scoring, 
                            return_train_score=True, n_jobs=-1)
 
@@ -301,28 +403,41 @@ for metric in scoring.keys():
     print(f"{metric.capitalize()} (Train): {cv_results[train_metric].mean():.4f} ± {cv_results[train_metric].std():.4f}")
     print(f"Train-Test Gap: {cv_results[train_metric].mean() - cv_results[test_metric].mean():.4f}\n")
 
+
+y_val_pred = best_model.predict(X_val)
+y_val_proba = best_model.predict_proba(X_val)[:, 1]
+# Calculate and print test set metrics
+print("\nVal Set Metrics:")
+print("Accuracy:", accuracy_score(y_val, y_val_pred))
+print("Balanced Accuracy:", balanced_accuracy_score(y_val, y_val_pred))
+print("Precision:", precision_score(y_val, y_val_pred, average="weighted"))
+print("Recall:", recall_score(y_val, y_val_pred, average="weighted"))
+print("F1 Score:", f1_score(y_val, y_val_pred, average="weighted"))
+print("MCC:", matthews_corrcoef(y_val, y_val_pred))
+print("ROC AUC:", roc_auc_score(y_val, y_val_proba) if len(np.unique(y_test)) == 2 else "N/A")
+print("\nConfusion Matrix:\n", confusion_matrix(y_val, y_val_pred))
 # Evaluate the model on the test set
-best_model.fit(X_resampled, y_resampled)
-y_pred = best_model.predict(X_test)
-y_proba = best_model.predict_proba(X_test)[:, 1]
+best_model.fit(X_train_main, y_train_main)
+y_test_pred = best_model.predict(X_test)
+y_test_proba = best_model.predict_proba(X_test)[:, 1]
 
 # Calculate and print test set metrics
 print("\nTest Set Metrics:")
-print("Accuracy:", accuracy_score(y_test, y_pred))
-print("Balanced Accuracy:", balanced_accuracy_score(y_test, y_pred))
-print("Precision:", precision_score(y_test, y_pred, average="weighted"))
-print("Recall:", recall_score(y_test, y_pred, average="weighted"))
-print("F1 Score:", f1_score(y_test, y_pred, average="weighted"))
-print("MCC:", matthews_corrcoef(y_test, y_pred))
-print("ROC AUC:", roc_auc_score(y_test, y_proba) if len(np.unique(y_test)) == 2 else "N/A")
-print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_pred))
+print("Accuracy:", accuracy_score(y_test, y_test_pred))
+print("Balanced Accuracy:", balanced_accuracy_score(y_test, y_test_pred))
+print("Precision:", precision_score(y_test, y_test_pred, average="weighted"))
+print("Recall:", recall_score(y_test, y_test_pred, average="weighted"))
+print("F1 Score:", f1_score(y_test, y_test_pred, average="weighted"))
+print("MCC:", matthews_corrcoef(y_test, y_test_pred))
+print("ROC AUC:", roc_auc_score(y_test, y_test_proba) if len(np.unique(y_test)) == 2 else "N/A")
+print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_test_pred))
 
 # Print classification report
 print("\nClassification Report:")
-print(classification_report(y_test, y_pred))
+print(classification_report(y_test, y_test_pred))
 
 # Print confusion matrix
-cm = confusion_matrix(y_test, y_pred)
+cm = confusion_matrix(y_test, y_test_pred)
 plt.figure(figsize=(8, 6))
 plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
 plt.title('Confusion Matrix')
@@ -338,7 +453,7 @@ plt.savefig('confusion_matrix.png')
 # Calculate ROC curve and AUC
 y_proba = best_model.predict_proba(X_test)[:, 1]
 fpr, tpr, _ = roc_curve(y_test, y_proba)
-tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+tn, fp, fn, tp = confusion_matrix(y_test, y_test_pred).ravel()
 roc_auc = auc(fpr, tpr)
 
 
@@ -347,16 +462,15 @@ print("False Positives (FP):", fp)
 print("True Negatives (TN):", tn)
 print("False Negatives (FN):", fn)
 
-# Define cross-validation strategy
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
+ 
 # Balanced Accuracy
-cv_balanced = cross_val_score(best_model, X_resampled, y_resampled, cv=cv, scoring='balanced_accuracy')
+cv_balanced = cross_val_score(best_model, X_train_main, y_train_main, cv=repeated_cv, scoring='balanced_accuracy')
 print(f"Cross-Validation Balanced Accuracy: {cv_balanced.mean():.4f} ± {cv_balanced.std():.4f}")
 # MCC - using make_scorer with matthews_corrcoef
 
 mcc_scorer = make_scorer(matthews_corrcoef)
-cv_mcc = cross_val_score(best_model, X_resampled, y_resampled, cv=cv, scoring=mcc_scorer)
+cv_mcc = cross_val_score(best_model, X_train_main, y_train_main, cv=repeated_cv, scoring=mcc_scorer)
 print(f"Cross-Validation MCC: {cv_mcc.mean():.4f} ± {cv_mcc.std():.4f}")
 # Calculate PR AUC (average precision)
 pr_auc = average_precision_score(y_test, y_proba)
